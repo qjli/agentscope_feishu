@@ -7,7 +7,7 @@ agentscope:
     app-secret: ${FEISHU_APP_SECRET:5LtkHVpovHgzJgGrRQUFHkl0FiuPCrGQ}
     verification-token: ${FEISHU_VERIFICATION_TOKEN:gkdfmyVpLKrAVSe0tpbRhgNHxaTPvBbN}
     encrypt-key: ${FEISHU_ENCRYPT_KEY:}
-    session-dir: ""
+    session-dir: "/Users/qjli/03LD/26/21-agentscope-feishu/001-cursor/agentscope_feishu/session"
     idempotency-ttl-seconds: 600
   model:
     dashscope-api-key: ${AGENTSCOPE_MODEL_DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}

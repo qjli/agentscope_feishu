@@ -77,6 +77,9 @@ public class FeishuSessionAgentFactory {
                 .memory(new InMemoryMemory())
                 .toolkit(toolkit)
                 .toolExecutionContext(toolCtx)
+                // 会话 JsonSession 恢复后，若上次停在 TOOL_SUSPENDED / 未完成 tool 结果，下一条用户消息会触发该异常；
+                // 开启后由框架自动回收挂起的 tool call，避免用户未点卡片就发新消息时进程崩溃。
+                .enablePendingToolRecovery(true)
                 .build();
 
         agent.loadIfExists(jsonSession, sessionId);
