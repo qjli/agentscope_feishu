@@ -3,15 +3,15 @@ server:
 
 agentscope:
   feishu:
-    app-id: ${FEISHU_APP_ID:}
-    app-secret: ${FEISHU_APP_SECRET:}
-    verification-token: ${FEISHU_VERIFICATION_TOKEN:}
+    app-id: ${FEISHU_APP_ID:cli_a97428ec6c381cbd}
+    app-secret: ${FEISHU_APP_SECRET:5LtkHVpovHgzJgGrRQUFHkl0FiuPCrGQ}
+    verification-token: ${FEISHU_VERIFICATION_TOKEN:gkdfmyVpLKrAVSe0tpbRhgNHxaTPvBbN}
     encrypt-key: ${FEISHU_ENCRYPT_KEY:}
     session-dir: ""
     idempotency-ttl-seconds: 600
   model:
-    dashscope-api-key: ${AGENTSCOPE_MODEL_DASHSCOPE_API_KEY:}
-    name: ${AGENTSCOPE_MODEL_NAME:qwen-turbo}
+    dashscope-api-key: ${AGENTSCOPE_MODEL_DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
+    name: ${AGENTSCOPE_MODEL_NAME:qwen3-vl-plus}
 
 logging:
   level:
