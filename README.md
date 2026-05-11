@@ -129,9 +129,7 @@ flowchart TD
   SYNC --> SID["SessionIdSanitizer.sessionIdFromChatAndUser()<br/>+ normalizeThreadSuffix"]
   SYNC --> TXT["FeishuTextContentParser.extractText()"]
   TXT --> LOCK["FeishuSessionLockRegistry.lockFor(sessionId)<br/>synchronized"]
-  LOCK --> CQ["ContractQueryShortcut.tryHandle(chatId, text)<br/>匹配「查询…合同」则直连发卡片"]
-  CQ -->|true 命中| OUT1["FeishuMessageSender.sendContractTemplateCard()<br/>或 replyTextToChat 回退"]
-  CQ -->|false 未命中| MODEL{"FeishuSessionAgentFactory<br/>.isModelConfigured()?"}
+  LOCK --> MODEL{"FeishuSessionAgentFactory<br/>.isModelConfigured()?"}
   MODEL -->|否| OUT2["FeishuMessageSender.replyTextToChat()<br/>未配置模型提示"]
   MODEL -->|是| CREATE["FeishuSessionAgentFactory.createAgentForSession()"]
   CREATE --> CALL["ReActAgent.call(Msg USER)"]
@@ -149,7 +147,7 @@ flowchart TD
 | 幂等 | `Cache<String,Boolean>` | `putIfAbsent(messageId)`，Bean 名 `processedMessageIds` |
 | 会话键 | `SessionIdSanitizer` | `sessionIdFromChatAndUser`、`normalizeThreadSuffix` |
 | 正文 | `FeishuTextContentParser` | `extractText(messageType, content)` |
-| 合同固定句式 | `ContractQueryShortcut` | `tryHandle` → `ContractRemoteClient.fetchContractInfo`、`FeishuMessageSender.sendContractTemplateCard` |
+| 合同查询（含「查询…合同」） | `ReActAgent` + `feishu_crm` 技能 | 模型 `load_skill_through_path` 后必须 `contract_send_info_card`（见 `SKILL.md` 强制规则） |
 | Agent | `FeishuSessionAgentFactory` | `createAgentForSession` → `ReActAgent.builder()…skillBox…build()`，`loadIfExists(JsonSession)` |
 | 推理 | `ReActAgent` | `call(Msg)`（Project Reactor `block()` 在 `FeishuMessageEventService`） |
 | HITL | `PendingApprovalService` | `registerAndSendCard`；恢复见下文分支 B |
@@ -160,7 +158,7 @@ flowchart TD
 
 ### 4. 分支 A 延伸：Agent 内 **Skill + 工具** → Mock API → 再发飞书卡片（CRM / 合同）
 
-当用户话术**未**命中 `ContractQueryShortcut` 时，由模型通过 **SkillBox** 渐进加载 `feishu_crm` 并调用工具（框架提供 `load_skill_through_path` 等）。
+合同、CRM 等均由 **ReActAgent** 经 **SkillBox** 渐进加载 `feishu_crm` 并调用 `CrmSkillTools`（框架提供 `load_skill_through_path` 等）；合同句式约束见 `skills/feishu_crm/SKILL.md` 与系统提示。
 
 ```mermaid
 flowchart LR
@@ -249,7 +247,6 @@ src/main/java/io/agentscope/feishu/
 ├── contract/                            # 合同 Mock：GET /api/contract/info、POST /api/contract/form-save
 │   ├── ContractCardVariables.java
 │   ├── ContractFormSaveService.java     # 与 HTTP form-save 同日志逻辑；卡片回调也走此服务
-│   ├── ContractQueryShortcut.java       # 「查询xxx合同」直连发模板卡片
 │   ├── ContractRemoteClient.java
 │   └── web/ContractApiController.java
 ├── lark/
@@ -298,7 +295,7 @@ CRM 能力仅通过 **Skill + 渐进式工具** 提供：`FeishuSessionAgentFact
 | `查询<公司>`（整句不含「订单」） | 同上 |
 | `查询<公司>订单量` | `crm_send_orders_summary_card(..., ALL)` → `GET /api/crm/orders` |
 | `查询<公司>已结算的订单量` | `crm_send_orders_summary_card(..., SETTLED)` |
-| `查询HT-20250908192882合同` 等 | `contract_send_info_card` → `GET /api/contract/info` → 模板 `AAqtmy18CRaGt`（变量 `contractCode`…`signDate`） |
+| `查询HT-20250908192882合同` 等 | 经 Agent：`load_skill` + `contract_send_info_card` → `GET /api/contract/info` → 模板 `AAqtmy18CRaGt`（`SKILL.md` 约定必须走工具发卡片） |
 
 配置：`agentscope.crm.base-url`（留空则 `http://127.0.0.1:{server.port}`，**合同接口与同 base**）；`agentscope.contract.card-template-id` 等见 `application.yml`。
 
@@ -315,7 +312,7 @@ CRM 能力仅通过 **Skill + 渐进式工具** 提供：`FeishuSessionAgentFact
 - `agentscope.crm.orders-use-template-card`、`orders-card-template-id`、`orders-card-template-version`（或环境变量 `FEISHU_ORDERS_CARD_TEMPLATE_*`）。
 - 变量映射见 `OrdersCardVariables`：`companyName`、`unSettledNum`、`settledNum`、`invoicedNum`、`totalNum`（均为字符串传入模板）。`/api/crm/orders` 的 Mock 会按请求中的 **companyName** 生成数据（演示企业为富数据，其它为基于名称 hash 的确定性占位）。
 
-句式 **`查询<合同编号>合同`**（如 `查询HT-20250908192882合同`）在进 Agent 前由 `ContractQueryShortcut` **直连**拉取 `/api/contract/info` 并发送模板卡片，避免模型未调工具导致只显示纯文本。
+句式 **`查询<合同编号>合同`** 与 CRM 话术一样 **一律进 `ReActAgent`**，由 `feishu_crm` 技能与 `contract_send_info_card` 工具发模板卡片（系统提示 + `SKILL.md` 强制规则约束模型，不得只回纯文本替代卡片）。
 
 合同表单保存：**飞书不会请求** `POST /api/contract/form-save`（除非你在卡片里把按钮配置成自定义请求地址）。默认流程是 **`card.action.trigger` → `/webhook/event`**。`FeishuWebhookController` 会用 `LarkEventBodyNormalizer` 把飞书先发到的**扁平 JSON**包成 `schema 2.0` 信封，避免 `HandlerNotFoundException`。`PendingApprovalService` 收到带 `form_value` 的按钮回调后，调用与 HTTP 相同的 **`ContractFormSaveService`**，日志前缀同为 **`[合同表单保存]`**。联调或网关仍可直接 `POST /api/contract/form-save`。
 

@@ -79,7 +79,7 @@ public class CrmSkillTools {
 
     @Tool(
             name = "contract_send_info_card",
-            description = "按合同编号查询合同信息，并向当前飞书会话发送合同模板卡片（变量含 contractCode 等）。例如用户说「查询HT-20250908192882合同」。成功后不要向用户总结或扩展，见工具返回中的约束。")
+            description = "按合同编号查询合同信息，并向当前飞书会话发送合同模板卡片（变量含 contractCode 等）。用户说「查询HT-xxx合同」时必须调用本工具发卡片，禁止只口述合同内容。成功后不要向用户总结或扩展，见工具返回中的约束。")
     public Mono<String> contractSendInfoCard(
             @ToolParam(name = "contractCode", description = "合同编号，如 HT-20250908192882") String contractCode,
             FeishuToolContext ctx) {

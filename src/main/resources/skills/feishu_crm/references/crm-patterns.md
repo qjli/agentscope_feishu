@@ -9,7 +9,7 @@
 | `查询<公司>`（整句不含「订单」） | 同上                                            |
 | `查询<公司>订单量`        | `crm_send_orders_summary_card(<公司>, ALL)`     |
 | `查询<公司>已结算的订单量`    | `crm_send_orders_summary_card(<公司>, SETTLED)` |
-| `查询<合同编号>合同`（如 `查询HT-20250908192882合同`） | `contract_send_info_card(<合同编号>)` |
+| `查询<合同编号>合同`（如 `查询HT-20250908192882合同`） | 必须先 `load_skill_through_path(feishu_crm)`，再 **必须** `contract_send_info_card(<合同编号>)`（禁止只口述不发卡片） |
 
 ## orderStatus
 

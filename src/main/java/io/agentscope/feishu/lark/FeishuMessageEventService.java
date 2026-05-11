@@ -11,7 +11,6 @@ import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.session.Session;
 import io.agentscope.feishu.agent.FeishuSessionAgentFactory;
-import io.agentscope.feishu.contract.ContractQueryShortcut;
 import io.agentscope.feishu.session.FeishuSessionLockRegistry;
 import io.agentscope.feishu.session.SessionIdSanitizer;
 import java.util.List;
@@ -33,7 +32,6 @@ public class FeishuMessageEventService {
     private final Cache<String, Boolean> processedMessageIds;
     private final FeishuSessionLockRegistry lockRegistry;
     private final PendingApprovalService pendingApprovalService;
-    private final ContractQueryShortcut contractQueryShortcut;
 
     public FeishuMessageEventService(
             @Qualifier("feishuEventExecutor") Executor feishuEventExecutor,
@@ -42,8 +40,7 @@ public class FeishuMessageEventService {
             Session agentscopeJsonSession,
             Cache<String, Boolean> processedMessageIds,
             FeishuSessionLockRegistry lockRegistry,
-            PendingApprovalService pendingApprovalService,
-            ContractQueryShortcut contractQueryShortcut) {
+            PendingApprovalService pendingApprovalService) {
         this.feishuEventExecutor = feishuEventExecutor;
         this.agentFactory = agentFactory;
         this.messageSender = messageSender;
@@ -51,7 +48,6 @@ public class FeishuMessageEventService {
         this.processedMessageIds = processedMessageIds;
         this.lockRegistry = lockRegistry;
         this.pendingApprovalService = pendingApprovalService;
-        this.contractQueryShortcut = contractQueryShortcut;
     }
 
     public void handleMessageEvent(P2MessageReceiveV1 event) {
@@ -101,11 +97,6 @@ public class FeishuMessageEventService {
 
         Object lock = lockRegistry.lockFor(sessionId);
         synchronized (lock) {
-            // 「查询xxx合同」不经 Agent，保证飞书模板卡片一定发出（避免模型只回纯文本）
-            if (contractQueryShortcut.tryHandle(chatId, text)) {
-                return;
-            }
-
             if (!agentFactory.isModelConfigured()) {
                 messageSender.replyTextToChat(
                         chatId, "（未配置模型）Echo: " + text + "\n\n请设置环境变量 AGENTSCOPE_MODEL_DASHSCOPE_API_KEY 或配置 agentscope.model.dashscope-api-key。");
@@ -135,7 +126,7 @@ public class FeishuMessageEventService {
             if (reply != null && !reply.isBlank()) {
                 messageSender.replyTextToChat(chatId, reply.strip());
             }
-            // 空文本：不追发消息（例如 CRM 卡片已由工具送达，模型按约束不再总结）
+            // 空文本：不追发消息（例如 CRM/合同卡片已由工具送达，模型按约束不再总结）
             agent.saveTo(jsonSession, sessionId);
         }
     }
