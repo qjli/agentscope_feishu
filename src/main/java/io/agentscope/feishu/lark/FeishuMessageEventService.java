@@ -8,7 +8,6 @@ import io.agentscope.core.ReActAgent;
 import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
-import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.session.Session;
 import io.agentscope.feishu.agent.FeishuSessionAgentFactory;
@@ -124,10 +123,10 @@ public class FeishuMessageEventService {
             }
 
             String reply = response.getTextContent();
-            if (reply == null || reply.isBlank()) {
-                reply = "（无文本回复）";
+            if (reply != null && !reply.isBlank()) {
+                messageSender.replyTextToChat(chatId, reply.strip());
             }
-            messageSender.replyTextToChat(chatId, reply);
+            // 空文本：不追发消息（例如 CRM 卡片已由工具送达，模型按约束不再总结）
             agent.saveTo(jsonSession, sessionId);
         }
     }

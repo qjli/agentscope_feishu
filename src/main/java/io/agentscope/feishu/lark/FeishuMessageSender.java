@@ -1,12 +1,18 @@
 package io.agentscope.feishu.lark;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lark.oapi.Client;
 import com.lark.oapi.service.im.v1.enums.CreateMessageReceiveIdTypeEnum;
 import com.lark.oapi.service.im.v1.model.CreateMessageReq;
 import com.lark.oapi.service.im.v1.model.CreateMessageReqBody;
 import com.lark.oapi.service.im.v1.model.CreateMessageResp;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.agentscope.feishu.crm.CrmApiProperties;
+import io.agentscope.feishu.crm.CustomerInfoCardVariables;
+import io.agentscope.feishu.crm.OrdersCardVariables;
+import io.agentscope.feishu.crm.dto.CustomerInfoResponse;
+import io.agentscope.feishu.crm.dto.OrdersSummaryResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,9 +24,62 @@ public class FeishuMessageSender {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final Client client;
+    private final CrmApiProperties crmApiProperties;
 
-    public FeishuMessageSender(Client client) {
+    public FeishuMessageSender(Client client, CrmApiProperties crmApiProperties) {
         this.client = client;
+        this.crmApiProperties = crmApiProperties;
+    }
+
+    /**
+     * 发送「卡片搭建工具」模板卡片（参见飞书文档：msg_type=interactive，content 内 type=template）。
+     *
+     * @return 是否调用成功（HTTP 业务成功）
+     */
+    public boolean sendCustomerInfoTemplateCard(String chatId, CustomerInfoResponse data) throws Exception {
+        return sendInteractiveTemplate(
+                chatId,
+                crmApiProperties.getCustomerInfoCardTemplateId(),
+                crmApiProperties.getCustomerInfoCardTemplateVersion(),
+                CustomerInfoCardVariables.toTemplateVariableNode(data));
+    }
+
+    /** 订单统计模板卡片（变量 companyName / unSettledNum / settledNum / invoicedNum / totalNum）。 */
+    public boolean sendOrdersTemplateCard(String chatId, OrdersSummaryResponse data) throws Exception {
+        return sendInteractiveTemplate(
+                chatId,
+                crmApiProperties.getOrdersCardTemplateId(),
+                crmApiProperties.getOrdersCardTemplateVersion(),
+                OrdersCardVariables.toTemplateVariableNode(data));
+    }
+
+    private boolean sendInteractiveTemplate(String chatId, String templateId, String templateVersion, JsonNode templateVariable)
+            throws Exception {
+        ObjectNode root = MAPPER.createObjectNode();
+        root.put("type", "template");
+        ObjectNode templateData = MAPPER.createObjectNode();
+        templateData.put("template_id", templateId);
+        if (templateVersion != null && !templateVersion.isBlank()) {
+            templateData.put("template_version_name", templateVersion.strip());
+        }
+        templateData.set("template_variable", templateVariable);
+        root.set("data", templateData);
+
+        String content = MAPPER.writeValueAsString(root);
+        CreateMessageReq req = CreateMessageReq.newBuilder()
+                .receiveIdType(CreateMessageReceiveIdTypeEnum.CHAT_ID)
+                .createMessageReqBody(CreateMessageReqBody.newBuilder()
+                        .receiveId(chatId)
+                        .msgType("interactive")
+                        .content(content)
+                        .build())
+                .build();
+        CreateMessageResp resp = client.im().message().create(req);
+        if (!resp.success()) {
+            log.warn("发送模板卡片失败 templateId={} code={} msg={}", templateId, resp.getCode(), resp.getMsg());
+            return false;
+        }
+        return true;
     }
 
     public void replyTextToChat(String chatId, String text) throws Exception {

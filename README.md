@@ -41,12 +41,14 @@ flowchart LR
   subgraph agentscope [AgentScope]
     AG[ReActAgent]
     TK[Toolkit]
+    SB[SkillBox]
     SS[JsonSession]
   end
   IM --> WH
   WH --> EVT
   EVT --> AG
   AG --> TK
+  AG --> SB
   TK --> API
   AG --> SS
 ```
@@ -68,8 +70,15 @@ src/main/java/io/agentscope/feishu/
 ├── config/
 │   ├── FeishuBeansConfiguration.java   # Client、EventDispatcher、JsonSession、线程池
 │   └── FeishuProperties.java           # agentscope.feishu.* 配置
+├── crm/                                 # CRM Mock REST、卡片变量、Skill 绑定工具（见下文「CRM（Skill）」）
+│   ├── CrmRemoteClient.java
+│   ├── CrmReplyFormatter.java
+│   ├── skill/                           # classpath 技能 feishu_crm 的 Java 适配
+│   │   ├── CrmClasspathSkillHolder.java
+│   │   └── CrmSkillTools.java
+│   └── web/CrmMockApiController.java    # GET /api/crm/customerInfo、/api/crm/orders
 ├── lark/
-│   ├── FeishuMessageEventService.java   # 收消息：幂等、串行、调用 Agent、处理 TOOL_SUSPENDED
+│   ├── FeishuMessageEventService.java   # 收消息：幂等、串行、ReActAgent（含 SkillBox）、TOOL_SUSPENDED
 │   ├── FeishuMessageSender.java         # 发文本 / 交互卡片
 │   ├── FeishuTextContentParser.java     # 解析 text 消息 content JSON
 │   └── PendingApprovalService.java      # 卡片回调恢复 ToolSuspend
@@ -82,6 +91,8 @@ src/main/java/io/agentscope/feishu/
 │   └── ApprovalTools.java             # ToolSuspend 演示
 └── web/
     └── FeishuWebhookController.java     # POST /webhook/event
+
+src/main/resources/skills/feishu_crm/    # AgentScope 技能包：SKILL.md + references（ClasspathSkillRepository 根为 skills/）
 ```
 
 ---
@@ -97,6 +108,37 @@ src/main/java/io/agentscope/feishu/
 | 飞书 Tool | `getCurrentChatMetadata`、`sendFollowUpTextToCurrentChat`（`Mono`）；`feishuPing` 演示 **presetParameters** |
 | 幂等 | `message_id` 写入 Caffeine，TTL 可配置 |
 | HITL | `request_sensitive_action_approval` 抛 `ToolSuspendException` → 发卡片 → 回调里 `agent.call` 工具结果消息并继续推理 |
+| **CRM（Skill）** | 用户消息统一进入 `ReActAgent`；`SkillBox` 注册 classpath 技能 `feishu_crm`，模型按需 `load_skill_through_path` 后调用 `crm_send_*` 工具 → `CrmRemoteClient` + **飞书模板卡片**（失败回退纯文本） |
+
+### CRM（AgentScope Skill）
+
+CRM 能力仅通过 **Skill + 渐进式工具** 提供：`FeishuSessionAgentFactory` 为每个会话挂载 `SkillBox`，技能定义在 `src/main/resources/skills/feishu_crm/`（`SKILL.md` + `references/`），Java 适配在 `io.agentscope.feishu.crm.skill`（`CrmClasspathSkillHolder`、`CrmSkillTools`）。
+
+推荐用户话术（与 `references/crm-patterns.md` 一致；公司名可替换，`陕西中辰海锋新能源有限公司` 为 Mock 富数据示例）：
+
+| 用户输入 | 后端效果（由模型调用工具完成） |
+|---------|------|
+| `查询<公司> 客户基本信息` | `crm_send_customer_info_card` → `GET /api/crm/customerInfo` |
+| `查询<公司>`（整句不含「订单」） | 同上 |
+| `查询<公司>订单量` | `crm_send_orders_summary_card(..., ALL)` → `GET /api/crm/orders` |
+| `查询<公司>已结算的订单量` | `crm_send_orders_summary_card(..., SETTLED)` |
+
+配置：`agentscope.crm.base-url`（留空则 `http://127.0.0.1:{server.port}`，适合本机 Mock 与网关反代后的真实后端）。
+
+客户信息卡片（与 [飞书文档：使用指定应用发送飞书卡片](https://open.feishu.cn/document/feishu-cards/quick-start/send-feishu-cards-with-app-bots) 一致）：
+
+- `agentscope.crm.customer-info-use-template-card`：是否用模板卡片（默认 `true`）。
+- `agentscope.crm.customer-info-card-template-id`：搭建工具中的卡片 ID（默认 `AAqtrZyWSproW`，可用环境变量 `FEISHU_CUSTOMER_CARD_TEMPLATE_ID` 覆盖）。
+- `agentscope.crm.customer-info-card-template-version`：模板版本号，留空使用平台最新已发布版本。
+
+接口字段 → 卡片变量映射见 `CustomerInfoCardVariables`（`baseCompanyName`、`baseCompanyBizCode`、`baseCompanyType` 等）。
+
+订单统计卡片（模板 ID 默认 `AAqtroVtGb0Yc`）：
+
+- `agentscope.crm.orders-use-template-card`、`orders-card-template-id`、`orders-card-template-version`（或环境变量 `FEISHU_ORDERS_CARD_TEMPLATE_*`）。
+- 变量映射见 `OrdersCardVariables`：`companyName`、`unSettledNum`、`settledNum`、`invoicedNum`、`totalNum`（均为字符串传入模板）。`/api/crm/orders` 的 Mock 会按请求中的 **companyName** 生成数据（演示企业为富数据，其它为基于名称 hash 的确定性占位）。
+
+其它非 CRM 问题仍由同一 `ReActAgent` 与通用飞书工具处理。
 
 ---
 

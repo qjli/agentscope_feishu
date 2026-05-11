@@ -12,6 +12,16 @@ agentscope:
   model:
     dashscope-api-key: ${AGENTSCOPE_MODEL_DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
     name: ${AGENTSCOPE_MODEL_NAME:qwen3-vl-plus}
+  crm:
+    # 留空则使用 http://127.0.0.1:{server.port} 调用本应用内 Mock：/api/crm/customerInfo、/api/crm/orders
+    base-url: ${AGENTSCOPE_CRM_BASE_URL:}
+    # 客户信息：飞书卡片搭建工具模板（参见开放平台「使用指定应用发送飞书卡片」）
+    customer-info-use-template-card: true
+    customer-info-card-template-id: ${FEISHU_CUSTOMER_CARD_TEMPLATE_ID:AAqtrZyWSproW}
+    customer-info-card-template-version: ${FEISHU_CUSTOMER_CARD_TEMPLATE_VERSION:}
+    orders-use-template-card: true
+    orders-card-template-id: ${FEISHU_ORDERS_CARD_TEMPLATE_ID:AAqtroVtGb0Yc}
+    orders-card-template-version: ${FEISHU_ORDERS_CARD_TEMPLATE_VERSION:}
 
 logging:
   level:

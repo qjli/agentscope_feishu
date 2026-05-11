@@ -11,6 +11,7 @@ import com.lark.oapi.service.im.ImService.P2MessageReceiveV1Handler;
 import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
 import io.agentscope.core.session.JsonSession;
 import io.agentscope.core.session.Session;
+import io.agentscope.feishu.crm.CrmApiProperties;
 import io.agentscope.feishu.lark.FeishuMessageEventService;
 import io.agentscope.feishu.lark.PendingApprovalService;
 import java.nio.file.Path;
@@ -23,7 +24,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 @Configuration
-@EnableConfigurationProperties(FeishuProperties.class)
+@EnableConfigurationProperties({FeishuProperties.class, CrmApiProperties.class})
 public class FeishuBeansConfiguration {
 
     @Bean
