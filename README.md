@@ -60,6 +60,175 @@ flowchart LR
 
 ---
 
+## 全流程流程图（用户输入 → 飞书可见输出）
+
+以下从**飞书用户行为**出发，标出本仓库中的**核心类与核心方法**；飞书开放平台与公网入口（如 ngrok）为外部依赖，图中一并标出。
+
+### 1. 端到端总览
+
+```mermaid
+flowchart TB
+  subgraph FeishuCloud [飞书开放平台]
+    IM[IM 用户发消息]
+    CB[卡片 action 回调]
+    API[Open API 写会话消息]
+  end
+  subgraph Ingress [公网可达应用]
+    WH["FeishuWebhookController.event()<br/>POST /webhook/event"]
+  end
+  subgraph App [本应用 Spring]
+    ED["EventDispatcher.handle EventReq<br/>Bean: FeishuBeansConfiguration.feishuEventDispatcher"]
+    FMS["FeishuMessageEventService"]
+    PAS["PendingApprovalService"]
+    AG["ReActAgent"]
+  end
+  IM --> WH
+  CB --> WH
+  WH --> ED
+  ED -->|im.message.receive_v1| FMS
+  ED -->|card.action.trigger| PAS
+  FMS --> AG
+  PAS --> AG
+  FMS --> API
+  PAS --> API
+  AG --> API
+```
+
+说明：**用户可见输出**均通过飞书 **Open API**（`com.lark.oapi.Client`，由 `FeishuBeansConfiguration.larkClient()` 创建）发回会话，例如 `FeishuMessageSender.replyTextToChat` / `sendInteractiveTemplate` / `sendApprovalCard`。
+
+---
+
+### 2. Webhook 入口与事件分发（所有飞书事件共用）
+
+```mermaid
+flowchart TD
+  REQ[HTTP POST /webhook/event] --> WH["FeishuWebhookController.event()"]
+  WH --> READ["读取 request body 字节"]
+  READ --> NORM["LarkEventBodyNormalizer.maybeWrapFlatCardAction()<br/>扁平卡片回调 → schema 2.0"]
+  NORM --> ER["EventReq.setBody / setHeaders / setHttpPath"]
+  ER --> ED["EventDispatcher.handle(EventReq)"]
+  ED -->|注册于 FeishuBeansConfiguration| R1["onP2MessageReceiveV1 →<br/>FeishuMessageEventService.handleMessageEvent()"]
+  ED -->|注册于 FeishuBeansConfiguration| R2["onP2CardActionTrigger →<br/>PendingApprovalService.handleCardAction()"]
+  ED --> RESP[EventResp 写回 HttpServletResponse]
+```
+
+要点：`EventDispatcher` 在 `FeishuBeansConfiguration.feishuEventDispatcher()` 中构建，使用 `FeishuProperties` 的 **Verification Token** 与 **Encrypt Key** 做签名校验/解密（由 SDK 处理）。
+
+---
+
+### 3. 分支 A：用户在会话里发**文本**（`im.message.receive_v1`）
+
+```mermaid
+flowchart TD
+  subgraph Async [异步]
+    HME["FeishuMessageEventService.handleMessageEvent()<br/>feishuEventExecutor 线程池"]
+  end
+  HME --> SYNC["handleMessageEventSync()"]
+  SYNC --> FILTER["过滤机器人自身等"]
+  SYNC --> IDEM["Cache.putIfAbsent message_id<br/>Bean: processedMessageIds"]
+  SYNC --> SID["SessionIdSanitizer.sessionIdFromChatAndUser()<br/>+ normalizeThreadSuffix"]
+  SYNC --> TXT["FeishuTextContentParser.extractText()"]
+  TXT --> LOCK["FeishuSessionLockRegistry.lockFor(sessionId)<br/>synchronized"]
+  LOCK --> CQ["ContractQueryShortcut.tryHandle(chatId, text)<br/>匹配「查询…合同」则直连发卡片"]
+  CQ -->|true 命中| OUT1["FeishuMessageSender.sendContractTemplateCard()<br/>或 replyTextToChat 回退"]
+  CQ -->|false 未命中| MODEL{"FeishuSessionAgentFactory<br/>.isModelConfigured()?"}
+  MODEL -->|否| OUT2["FeishuMessageSender.replyTextToChat()<br/>未配置模型提示"]
+  MODEL -->|是| CREATE["FeishuSessionAgentFactory.createAgentForSession()"]
+  CREATE --> CALL["ReActAgent.call(Msg USER)"]
+  CALL --> REASON{"response.getGenerateReason()"}
+  REASON -->|TOOL_SUSPENDED| REG["PendingApprovalService.registerAndSendCard()<br/>→ FeishuMessageSender.sendApprovalCard()"]
+  REASON -->|其它| TXTREP["非空则 FeishuMessageSender.replyTextToChat()"]
+  CALL --> SAVE["ReActAgent.saveTo(JsonSession, sessionId)"]
+```
+
+**核心类与方法速查（文本分支）**
+
+| 步骤 | 类 | 方法 / 说明 |
+|------|-----|----------------|
+| 入队异步 | `FeishuMessageEventService` | `handleMessageEvent` → `handleMessageEventSync` |
+| 幂等 | `Cache<String,Boolean>` | `putIfAbsent(messageId)`，Bean 名 `processedMessageIds` |
+| 会话键 | `SessionIdSanitizer` | `sessionIdFromChatAndUser`、`normalizeThreadSuffix` |
+| 正文 | `FeishuTextContentParser` | `extractText(messageType, content)` |
+| 合同固定句式 | `ContractQueryShortcut` | `tryHandle` → `ContractRemoteClient.fetchContractInfo`、`FeishuMessageSender.sendContractTemplateCard` |
+| Agent | `FeishuSessionAgentFactory` | `createAgentForSession` → `ReActAgent.builder()…skillBox…build()`，`loadIfExists(JsonSession)` |
+| 推理 | `ReActAgent` | `call(Msg)`（Project Reactor `block()` 在 `FeishuMessageEventService`） |
+| HITL | `PendingApprovalService` | `registerAndSendCard`；恢复见下文分支 B |
+| 回写飞书 | `FeishuMessageSender` | `replyTextToChat`、`sendInteractiveTemplate`（模板卡片）、`sendApprovalCard` |
+| 持久化 | `ReActAgent` + `Session` | `saveTo`；`Session` 实现为 `JsonSession`（`FeishuBeansConfiguration.agentscopeJsonSession`） |
+
+---
+
+### 4. 分支 A 延伸：Agent 内 **Skill + 工具** → Mock API → 再发飞书卡片（CRM / 合同）
+
+当用户话术**未**命中 `ContractQueryShortcut` 时，由模型通过 **SkillBox** 渐进加载 `feishu_crm` 并调用工具（框架提供 `load_skill_through_path` 等）。
+
+```mermaid
+flowchart LR
+  subgraph Factory [FeishuSessionAgentFactory.createAgentForSession]
+    TK["Toolkit + FeishuLarkTools + ApprovalTools"]
+    SB["SkillBox.registration()<br/>.skill(CrmClasspathSkillHolder.feishuCrmSkill())<br/>.tool(CrmSkillTools).apply()"]
+    AG["ReActAgent.builder()…skillBox(skillBox)…build()"]
+  end
+  subgraph Tools [CrmSkillTools 中 @Tool]
+    T1["crmSendCustomerInfoCard"]
+    T2["crmSendOrdersSummaryCard"]
+    T3["contractSendInfoCard"]
+  end
+  subgraph Http [本机或 agentscope.crm.base-url]
+    CRM["CrmMockApiController<br/>/api/crm/*"]
+    CNT["ContractApiController<br/>/api/contract/info"]
+  end
+  subgraph LarkSend [回写飞书]
+    FS["FeishuMessageSender<br/>sendCustomerInfoTemplateCard<br/>sendOrdersTemplateCard<br/>sendContractTemplateCard"]
+  end
+  AG --> TK
+  AG --> SB
+  SB --> Tools
+  T1 --> CRM
+  T2 --> CRM
+  T3 --> CNT
+  T1 --> FS
+  T2 --> FS
+  T3 --> FS
+```
+
+**变量映射**：`CustomerInfoCardVariables` / `OrdersCardVariables` / `ContractCardVariables` → `FeishuMessageSender` 内私有 `sendInteractiveTemplate(chatId, templateId, version, templateVariable)` → `Client.im().message().create()`。
+
+---
+
+### 5. 分支 B：用户点击**卡片**（`card.action.trigger`）
+
+```mermaid
+flowchart TD
+  WH2["FeishuWebhookController.event()"] --> PAS["PendingApprovalService.handleCardAction()"]
+  PAS --> FORM{"action.getFormValue()<br/>非空?"}
+  FORM -->|是 合同表单等| CFS["ContractFormSaveService.recordFormSave()<br/>日志: 合同表单保存"]
+  FORM -->|否| VAL["action.getValue()<br/>resumeId / sessionId / decision"]
+  VAL --> HITL{"审批三字段齐全?"}
+  HITL -->|是| ASYNC["feishuEventExecutor.execute<br/>→ resumeAfterCard()"]
+  ASYNC --> RESUME["ReActAgent.call(TOOL Msg)<br/>ToolResultBlock 注入"]
+  RESUME --> OUT3["FeishuMessageSender.replyTextToChat()"]
+  HITL -->|否| WARN["log.warn 缺参数"]
+  PAS --> TOAST["P2CardActionTriggerResponse + CallBackToast"]
+```
+
+**`resumeAfterCard` 要点**（`PendingApprovalService` 私有方法）：`pendingByResumeId.remove(resumeId)` 取回挂起的 `ReActAgent`，构造 `ToolResultBlock`，再 `agent.call(toolMsg)`，最后 `replyTextToChat` 与 `saveTo`。
+
+---
+
+### 6. 可选：HTTP 直连保存合同表单（非飞书默认路径）
+
+```mermaid
+flowchart LR
+  CLIENT[外部系统或 Postman] --> POST["POST /api/contract/form-save"]
+  POST --> CAC["ContractApiController.formSave()"]
+  CAC --> CFS2["ContractFormSaveService.recordFormSave()"]
+```
+
+飞书卡片按钮**默认**不会请求此 URL；与分支 B 中 `ContractFormSaveService` 为**同一套**落日志逻辑。
+
+---
+
 ## 仓库结构（核心代码）
 
 ```
