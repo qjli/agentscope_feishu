@@ -3,6 +3,8 @@ package io.agentscope.feishu.web;
 import com.lark.oapi.core.request.EventReq;
 import com.lark.oapi.core.response.EventResp;
 import com.lark.oapi.event.EventDispatcher;
+import io.agentscope.feishu.config.FeishuProperties;
+import io.agentscope.feishu.lark.LarkEventBodyNormalizer;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.OutputStream;
@@ -12,22 +14,33 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public class FeishuWebhookController {
 
-    private final EventDispatcher eventDispatcher;
+    private static final Logger log = LoggerFactory.getLogger(FeishuWebhookController.class);
 
-    public FeishuWebhookController(EventDispatcher feishuEventDispatcher) {
+    private final EventDispatcher eventDispatcher;
+    private final FeishuProperties feishuProperties;
+
+    public FeishuWebhookController(EventDispatcher feishuEventDispatcher, FeishuProperties feishuProperties) {
         this.eventDispatcher = feishuEventDispatcher;
+        this.feishuProperties = feishuProperties;
     }
 
     @RequestMapping("/webhook/event")
     public void event(HttpServletRequest request, HttpServletResponse response) throws Throwable {
         EventReq req = new EventReq();
-        req.setBody(request.getInputStream().readAllBytes());
+        byte[] raw = request.getInputStream().readAllBytes();
+        byte[] normalized = LarkEventBodyNormalizer.maybeWrapFlatCardAction(raw, feishuProperties);
+        if (normalized != raw) {
+            log.debug("已将飞书扁平卡片回调体规范化为 schema 2.0 信封");
+        }
+        req.setBody(normalized);
         req.setHeaders(copyHeaders(request));
         req.setHttpPath(request.getRequestURI());
 

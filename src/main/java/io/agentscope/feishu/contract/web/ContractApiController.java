@@ -1,11 +1,9 @@
 package io.agentscope.feishu.contract.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agentscope.feishu.contract.ContractFormSaveService;
 import io.agentscope.feishu.contract.dto.ContractInfoResponse;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,10 +19,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/contract")
 public class ContractApiController {
 
-    private static final Logger log = LoggerFactory.getLogger(ContractApiController.class);
-    private static final ObjectMapper OM = new ObjectMapper();
-
     private static final String DEMO_HT = "HT-20250908192882";
+
+    private final ContractFormSaveService contractFormSaveService;
+
+    public ContractApiController(ContractFormSaveService contractFormSaveService) {
+        this.contractFormSaveService = contractFormSaveService;
+    }
 
     @GetMapping("/info")
     public ContractInfoResponse info(@RequestParam("contractCode") String contractCode) {
@@ -50,11 +51,7 @@ public class ContractApiController {
 
     @PostMapping(value = "/form-save", consumes = MediaType.APPLICATION_JSON_VALUE)
     public Map<String, Object> formSave(@RequestBody JsonNode body) {
-        try {
-            log.info("[合同表单保存] 收到 JSON：\n{}", OM.writerWithDefaultPrettyPrinter().writeValueAsString(body));
-        } catch (Exception e) {
-            log.info("[合同表单保存] 收到 body（序列化失败）: {}", body);
-        }
+        contractFormSaveService.recordFormSave(body);
         return Map.of("ok", true);
     }
 }

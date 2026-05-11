@@ -79,10 +79,12 @@ src/main/java/io/agentscope/feishu/
 │   └── web/CrmMockApiController.java    # GET /api/crm/customerInfo、/api/crm/orders
 ├── contract/                            # 合同 Mock：GET /api/contract/info、POST /api/contract/form-save
 │   ├── ContractCardVariables.java
+│   ├── ContractFormSaveService.java     # 与 HTTP form-save 同日志逻辑；卡片回调也走此服务
 │   ├── ContractQueryShortcut.java       # 「查询xxx合同」直连发模板卡片
 │   ├── ContractRemoteClient.java
 │   └── web/ContractApiController.java
 ├── lark/
+│   ├── LarkEventBodyNormalizer.java     # 扁平卡片回调 → schema 2.0，供 EventDispatcher 识别
 │   ├── FeishuMessageEventService.java   # 收消息：幂等、串行、ReActAgent（含 SkillBox）、TOOL_SUSPENDED
 │   ├── FeishuMessageSender.java         # 发文本 / 交互卡片
 │   ├── FeishuTextContentParser.java     # 解析 text 消息 content JSON
@@ -146,7 +148,7 @@ CRM 能力仅通过 **Skill + 渐进式工具** 提供：`FeishuSessionAgentFact
 
 句式 **`查询<合同编号>合同`**（如 `查询HT-20250908192882合同`）在进 Agent 前由 `ContractQueryShortcut` **直连**拉取 `/api/contract/info` 并发送模板卡片，避免模型未调工具导致只显示纯文本。
 
-合同表单保存：`POST /api/contract/form-save`（`application/json`）将请求体 **INFO 打印**；飞书卡片内表单提交走 `card.action.trigger`，`PendingApprovalService` 在检测到 `action.formValue` 非空时同样打印并返回 Toast「已收到」。
+合同表单保存：**飞书不会请求** `POST /api/contract/form-save`（除非你在卡片里把按钮配置成自定义请求地址）。默认流程是 **`card.action.trigger` → `/webhook/event`**。`FeishuWebhookController` 会用 `LarkEventBodyNormalizer` 把飞书先发到的**扁平 JSON**包成 `schema 2.0` 信封，避免 `HandlerNotFoundException`。`PendingApprovalService` 收到带 `form_value` 的按钮回调后，调用与 HTTP 相同的 **`ContractFormSaveService`**，日志前缀同为 **`[合同表单保存]`**。联调或网关仍可直接 `POST /api/contract/form-save`。
 
 其它非业务查询仍由同一 `ReActAgent` 与通用飞书工具处理。
 

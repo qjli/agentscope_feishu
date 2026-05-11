@@ -1,7 +1,7 @@
 package io.agentscope.feishu.lark;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.lark.oapi.event.cardcallback.model.CallBackAction;
 import com.lark.oapi.event.cardcallback.model.CallBackToast;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTrigger;
@@ -15,6 +15,7 @@ import io.agentscope.core.message.TextBlock;
 import io.agentscope.core.message.ToolResultBlock;
 import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.session.Session;
+import io.agentscope.feishu.contract.ContractFormSaveService;
 import io.agentscope.feishu.session.FeishuSessionLockRegistry;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,16 +39,19 @@ public class PendingApprovalService {
     private final Session session;
     private final FeishuSessionLockRegistry lockRegistry;
     private final Executor feishuEventExecutor;
+    private final ContractFormSaveService contractFormSaveService;
 
     public PendingApprovalService(
             FeishuMessageSender messageSender,
             Session agentscopeJsonSession,
             FeishuSessionLockRegistry lockRegistry,
-            @Qualifier("feishuEventExecutor") Executor feishuEventExecutor) {
+            @Qualifier("feishuEventExecutor") Executor feishuEventExecutor,
+            ContractFormSaveService contractFormSaveService) {
         this.messageSender = messageSender;
         this.session = agentscopeJsonSession;
         this.lockRegistry = lockRegistry;
         this.feishuEventExecutor = feishuEventExecutor;
+        this.contractFormSaveService = contractFormSaveService;
     }
 
     public void registerAndSendCard(
@@ -79,16 +83,29 @@ public class PendingApprovalService {
             CallBackAction action = event.getEvent().getAction();
             Map<String, Object> formValue = action.getFormValue();
             if (formValue != null && !formValue.isEmpty()) {
-                try {
-                    log.info(
-                            "[合同卡片表单保存] formValue={}\naction.value={}\naction.tag={}\naction.name={}",
-                            OM.writeValueAsString(formValue),
-                            action.getValue() != null ? OM.writeValueAsString(action.getValue()) : "{}",
-                            action.getTag(),
-                            action.getName());
-                } catch (JsonProcessingException e) {
-                    log.info("[合同卡片表单保存] formValue={} value={}", formValue, action.getValue());
+                ObjectNode payload = OM.createObjectNode();
+                payload.put("source", "lark_card_action.trigger");
+                payload.set("form_value", OM.valueToTree(formValue));
+                if (action.getTag() != null) {
+                    payload.put("action_tag", action.getTag());
                 }
+                if (action.getName() != null) {
+                    payload.put("action_name", action.getName());
+                }
+                if (action.getValue() != null && !action.getValue().isEmpty()) {
+                    payload.set("action_value", OM.valueToTree(action.getValue()));
+                }
+                if (event.getEvent().getContext() != null) {
+                    ObjectNode ctx = payload.putObject("context");
+                    var c = event.getEvent().getContext();
+                    if (c.getOpenMessageId() != null) {
+                        ctx.put("open_message_id", c.getOpenMessageId());
+                    }
+                    if (c.getOpenChatId() != null) {
+                        ctx.put("open_chat_id", c.getOpenChatId());
+                    }
+                }
+                contractFormSaveService.recordFormSave(payload);
                 toast.setContent("已收到");
                 return resp;
             }
