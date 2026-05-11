@@ -8,6 +8,9 @@ import com.lark.oapi.service.im.v1.enums.CreateMessageReceiveIdTypeEnum;
 import com.lark.oapi.service.im.v1.model.CreateMessageReq;
 import com.lark.oapi.service.im.v1.model.CreateMessageReqBody;
 import com.lark.oapi.service.im.v1.model.CreateMessageResp;
+import io.agentscope.feishu.contract.ContractCardVariables;
+import io.agentscope.feishu.contract.ContractProperties;
+import io.agentscope.feishu.contract.dto.ContractInfoResponse;
 import io.agentscope.feishu.crm.CrmApiProperties;
 import io.agentscope.feishu.crm.CustomerInfoCardVariables;
 import io.agentscope.feishu.crm.OrdersCardVariables;
@@ -25,10 +28,12 @@ public class FeishuMessageSender {
 
     private final Client client;
     private final CrmApiProperties crmApiProperties;
+    private final ContractProperties contractProperties;
 
-    public FeishuMessageSender(Client client, CrmApiProperties crmApiProperties) {
+    public FeishuMessageSender(Client client, CrmApiProperties crmApiProperties, ContractProperties contractProperties) {
         this.client = client;
         this.crmApiProperties = crmApiProperties;
+        this.contractProperties = contractProperties;
     }
 
     /**
@@ -51,6 +56,15 @@ public class FeishuMessageSender {
                 crmApiProperties.getOrdersCardTemplateId(),
                 crmApiProperties.getOrdersCardTemplateVersion(),
                 OrdersCardVariables.toTemplateVariableNode(data));
+    }
+
+    /** 合同信息模板卡片（变量 contractCode、contractName、partyA、partyB、contractContext、signDate）。 */
+    public boolean sendContractTemplateCard(String chatId, ContractInfoResponse data) throws Exception {
+        return sendInteractiveTemplate(
+                chatId,
+                contractProperties.getCardTemplateId(),
+                contractProperties.getCardTemplateVersion(),
+                ContractCardVariables.toTemplateVariableNode(data));
     }
 
     private boolean sendInteractiveTemplate(String chatId, String templateId, String templateVersion, JsonNode templateVariable)
@@ -76,7 +90,12 @@ public class FeishuMessageSender {
                 .build();
         CreateMessageResp resp = client.im().message().create(req);
         if (!resp.success()) {
-            log.warn("发送模板卡片失败 templateId={} code={} msg={}", templateId, resp.getCode(), resp.getMsg());
+            log.warn(
+                    "发送模板卡片失败 templateId={} code={} msg={} contentPreview={}",
+                    templateId,
+                    resp.getCode(),
+                    resp.getMsg(),
+                    content.length() > 800 ? content.substring(0, 800) + "…" : content);
             return false;
         }
         return true;

@@ -1,5 +1,8 @@
 package io.agentscope.feishu.lark;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lark.oapi.event.cardcallback.model.CallBackAction;
 import com.lark.oapi.event.cardcallback.model.CallBackToast;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTrigger;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTriggerResponse;
@@ -28,6 +31,7 @@ import org.springframework.stereotype.Service;
 public class PendingApprovalService {
 
     private static final Logger log = LoggerFactory.getLogger(PendingApprovalService.class);
+    private static final ObjectMapper OM = new ObjectMapper();
 
     private final ConcurrentHashMap<String, PendingApproval> pendingByResumeId = new ConcurrentHashMap<>();
     private final FeishuMessageSender messageSender;
@@ -70,6 +74,25 @@ public class PendingApprovalService {
         toast.setType("info");
         toast.setContent("已收到，正在处理");
         resp.setToast(toast);
+
+        if (event.getEvent() != null && event.getEvent().getAction() != null) {
+            CallBackAction action = event.getEvent().getAction();
+            Map<String, Object> formValue = action.getFormValue();
+            if (formValue != null && !formValue.isEmpty()) {
+                try {
+                    log.info(
+                            "[合同卡片表单保存] formValue={}\naction.value={}\naction.tag={}\naction.name={}",
+                            OM.writeValueAsString(formValue),
+                            action.getValue() != null ? OM.writeValueAsString(action.getValue()) : "{}",
+                            action.getTag(),
+                            action.getName());
+                } catch (JsonProcessingException e) {
+                    log.info("[合同卡片表单保存] formValue={} value={}", formValue, action.getValue());
+                }
+                toast.setContent("已收到");
+                return resp;
+            }
+        }
 
         Map<String, Object> value =
                 event.getEvent() != null && event.getEvent().getAction() != null

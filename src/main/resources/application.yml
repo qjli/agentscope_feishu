@@ -22,6 +22,10 @@ agentscope:
     orders-use-template-card: true
     orders-card-template-id: ${FEISHU_ORDERS_CARD_TEMPLATE_ID:AAqtroVtGb0Yc}
     orders-card-template-version: ${FEISHU_ORDERS_CARD_TEMPLATE_VERSION:}
+  contract:
+    use-template-card: true
+    card-template-id: ${FEISHU_CONTRACT_CARD_TEMPLATE_ID:AAqtmy18CRaGt}
+    card-template-version: ${FEISHU_CONTRACT_CARD_TEMPLATE_VERSION:}
 
 logging:
   level:

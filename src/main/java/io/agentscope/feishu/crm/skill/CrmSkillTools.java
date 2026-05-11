@@ -2,6 +2,9 @@ package io.agentscope.feishu.crm.skill;
 
 import io.agentscope.core.tool.Tool;
 import io.agentscope.core.tool.ToolParam;
+import io.agentscope.feishu.contract.ContractProperties;
+import io.agentscope.feishu.contract.ContractRemoteClient;
+import io.agentscope.feishu.contract.ContractReplyFormatter;
 import io.agentscope.feishu.crm.CrmApiProperties;
 import io.agentscope.feishu.crm.CrmRemoteClient;
 import io.agentscope.feishu.crm.CrmReplyFormatter;
@@ -14,7 +17,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * 绑定到 {@code feishu_crm} 技能的渐进式工具：调用 CRM HTTP，并向当前飞书会话发送模板卡片或纯文本。
+ * 绑定到 {@code feishu_crm} 技能的渐进式工具：CRM/合同 HTTP 与飞书模板卡片或纯文本。
  */
 @Component
 public class CrmSkillTools {
@@ -26,19 +29,28 @@ public class CrmSkillTools {
             "【工具回执】已发到当前会话。你对用户的最终回复：不要总结卡片、不要复述字段、不要延伸建议；不要写长文，宁可不再发文字，至多「已发。」二字。";
 
     private final CrmRemoteClient crmRemoteClient;
+    private final ContractRemoteClient contractRemoteClient;
     private final FeishuMessageSender messageSender;
     private final CrmApiProperties crmApiProperties;
+    private final ContractProperties contractProperties;
     private final CrmReplyFormatter crmReplyFormatter;
+    private final ContractReplyFormatter contractReplyFormatter;
 
     public CrmSkillTools(
             CrmRemoteClient crmRemoteClient,
+            ContractRemoteClient contractRemoteClient,
             FeishuMessageSender messageSender,
             CrmApiProperties crmApiProperties,
-            CrmReplyFormatter crmReplyFormatter) {
+            ContractProperties contractProperties,
+            CrmReplyFormatter crmReplyFormatter,
+            ContractReplyFormatter contractReplyFormatter) {
         this.crmRemoteClient = crmRemoteClient;
+        this.contractRemoteClient = contractRemoteClient;
         this.messageSender = messageSender;
         this.crmApiProperties = crmApiProperties;
+        this.contractProperties = contractProperties;
         this.crmReplyFormatter = crmReplyFormatter;
+        this.contractReplyFormatter = contractReplyFormatter;
     }
 
     @Tool(
@@ -63,6 +75,18 @@ public class CrmSkillTools {
                 .subscribeOn(Schedulers.boundedElastic())
                 .doOnError(e -> log.warn("crm_send_orders_summary_card", e))
                 .onErrorResume(e -> Mono.just("【CRM】订单统计查询失败：" + e.getMessage()));
+    }
+
+    @Tool(
+            name = "contract_send_info_card",
+            description = "按合同编号查询合同信息，并向当前飞书会话发送合同模板卡片（变量含 contractCode 等）。例如用户说「查询HT-20250908192882合同」。成功后不要向用户总结或扩展，见工具返回中的约束。")
+    public Mono<String> contractSendInfoCard(
+            @ToolParam(name = "contractCode", description = "合同编号，如 HT-20250908192882") String contractCode,
+            FeishuToolContext ctx) {
+        return Mono.fromCallable(() -> doSendContract(contractCode, ctx))
+                .subscribeOn(Schedulers.boundedElastic())
+                .doOnError(e -> log.warn("contract_send_info_card", e))
+                .onErrorResume(e -> Mono.just("【合同】查询失败：" + e.getMessage()));
     }
 
     private String doSendCustomer(String companyName, FeishuToolContext ctx) throws Exception {
@@ -118,5 +142,27 @@ public class CrmSkillTools {
             return "SETTLED";
         }
         return "ALL";
+    }
+
+    private String doSendContract(String contractCode, FeishuToolContext ctx) throws Exception {
+        String code = contractCode == null ? "" : contractCode.strip();
+        if (code.isEmpty()) {
+            return "contractCode 不能为空";
+        }
+        var dto = contractRemoteClient.fetchContractInfo(code);
+        String chatId = ctx.chatId();
+        if (contractProperties.isUseTemplateCard()
+                && contractProperties.getCardTemplateId() != null
+                && !contractProperties.getCardTemplateId().isBlank()) {
+            boolean ok = messageSender.sendContractTemplateCard(chatId, dto);
+            if (ok) {
+                return MODEL_SILENCE_AFTER_SEND;
+            }
+            String fallback = contractReplyFormatter.format(dto);
+            messageSender.replyTextToChat(chatId, fallback);
+            return MODEL_SILENCE_AFTER_SEND + "（卡片失败已发纯文本到会话，仍勿总结。）";
+        }
+        messageSender.replyTextToChat(chatId, contractReplyFormatter.format(dto));
+        return MODEL_SILENCE_AFTER_SEND + "（纯文本已发到会话，仍勿总结。）";
     }
 }
